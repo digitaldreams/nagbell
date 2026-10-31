@@ -23,7 +23,12 @@ final class TimerModel {
             do { try store.save(presets); saveError = nil } catch { saveError = "Couldn't save: \(error.localizedDescription)" }
         }
     }
-    var timers: [RunningTimer] = [] { didSet { keepAwake(!timers.isEmpty) } }
+    var timers: [RunningTimer] {
+        didSet {
+            keepAwake(!timers.isEmpty)
+            do { try timerStore.save(timers) } catch { saveError = "Couldn't save timers: \(error.localizedDescription)" }
+        }
+    }
     var now = Date()
     var saveError: String?
     let sounds = soundNames(in: soundFolders)
@@ -50,6 +55,7 @@ final class TimerModel {
     var anyDue: Bool { timers.contains { $0.isDue(at: now) } }
 
     private let store = PresetStore.standard
+    private let timerStore = TimerStore.standard
     private weak var window: NSWindow?
     private var awake: NSObjectProtocol?
     private let voice = AVSpeechSynthesizer()
@@ -57,13 +63,19 @@ final class TimerModel {
 
     init() {
         presets = store.load()
+        timers = timerStore.load() // overdue ones ring right away
         let ticker = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        ticker.tolerance = 0.2 // lets macOS batch wakeups; the countdown still looks steady
         RunLoop.main.add(ticker, forMode: .common) // .common: keeps ticking while a menu is open
+        keepAwake(!timers.isEmpty) // didSet doesn't run inside init
     }
 
-    func start(_ preset: Preset) { timers.append(RunningTimer(preset: preset, now: Date())) }
+    func start(_ preset: Preset) {
+        now = Date() // tick skips updating `now` while idle, so refresh it before the countdown shows
+        timers.append(RunningTimer(preset: preset, now: now))
+    }
     func remove(_ timer: RunningTimer) { timers.removeAll { $0.id == timer.id } }
     func snooze(_ timer: RunningTimer) {
         guard let i = timers.firstIndex(where: { $0.id == timer.id }) else { return }
@@ -81,6 +93,8 @@ final class TimerModel {
     }
 
     private func tick() {
+        // Idle: don't touch `now`, otherwise the window redraws every second all day.
+        guard !timers.isEmpty else { chimes = 0; return }
         let previous = now
         now = Date()
         if timers.contains(where: { $0.becameDue(from: previous, to: now) }) {
@@ -90,7 +104,7 @@ final class TimerModel {
             NSApp.requestUserAttention(.criticalRequest)
         }
         // Two chimes, then the voice, repeat. Waits for each to finish so they never overlap.
-        let sound = NSSound(named: soundName)
+        let sound = alarmSound(named: soundName)
         if !anyDue { chimes = 0 }
         if anyDue, sound?.isPlaying != true, !voice.isSpeaking {
             if speak, chimes >= 2 {

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import NagbellCore
@@ -99,4 +100,17 @@ func tempFile() -> URL {
         == "Hey Tuhin, you have 2 reminders. Motor Off: Switch off the water motor. Milk. Did you do them yet? If not, please do them right now.")
     #expect(friendlyReminder(user: "", reminders: [("Milk", "  ")])
         == "Hey, it's time for Milk. Did you do it yet? If not, please do it right now.")
+}
+
+@Test @MainActor func missingAlarmSoundFallsBackToGlass() {
+    #expect(alarmSound(named: "Basso")?.name == "Basso")
+    #expect(alarmSound(named: "Deleted Custom Sound")?.name == "Glass")
+}
+
+@Test func timerStoreKeepsTimersAcrossLaunches() throws {
+    let store = TimerStore(url: tempFile())
+    #expect(store.load().isEmpty)
+    let timers = [RunningTimer(preset: Preset(name: "Milk", minutes: 15), now: t0)]
+    try store.save(timers)
+    #expect(store.load() == timers)
 }

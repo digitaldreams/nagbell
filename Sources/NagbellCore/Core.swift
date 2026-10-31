@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 public struct Preset: Codable, Identifiable, Equatable, Sendable {
@@ -22,13 +23,14 @@ public struct Preset: Codable, Identifiable, Equatable, Sendable {
     ]
 }
 
-public struct RunningTimer: Identifiable, Equatable, Sendable {
-    public let id = UUID()
+public struct RunningTimer: Codable, Identifiable, Equatable, Sendable {
+    public let id: UUID
     public let name: String
     public let details: String
     public private(set) var dueAt: Date
 
     public init(preset: Preset, now: Date) {
+        id = UUID()
         name = preset.name
         details = preset.details
         dueAt = now.addingTimeInterval(TimeInterval(preset.minutes * 60))
@@ -52,38 +54,63 @@ public func formatCountdown(_ seconds: TimeInterval) -> String {
     return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%02d:%02d", m, sec)
 }
 
-public struct PresetStore: Sendable {
+public typealias PresetStore = JSONStore<[Preset]>
+public typealias TimerStore = JSONStore<[RunningTimer]>
+
+extension JSONStore where Value == [Preset] {
+    public init(url: URL, legacy: URL? = nil) { self.init(url: url, fallback: Preset.defaults, legacy: legacy) }
+
+    public static var standard: PresetStore {
+        PresetStore(url: URL.applicationSupportDirectory.appendingPathComponent("Nagbell/presets.json"),
+                    legacy: URL.applicationSupportDirectory.appendingPathComponent("StickyTimer/presets.json"))
+    }
+}
+
+/// Running timers are saved too, so a quit, crash or reboot doesn't silently drop a reminder.
+extension JSONStore where Value == [RunningTimer] {
+    public init(url: URL) { self.init(url: url, fallback: []) }
+
+    public static var standard: TimerStore {
+        TimerStore(url: URL.applicationSupportDirectory.appendingPathComponent("Nagbell/timers.json"))
+    }
+}
+
+public struct JSONStore<Value: Codable & Sendable>: Sendable {
     public let url: URL
-    /// Where presets lived before the app was renamed; moved to `url` on first load.
+    public let fallback: Value
+    /// Where the file lived before the app was renamed; moved to `url` on first load.
     public let legacy: URL?
 
-    public init(url: URL, legacy: URL? = nil) { self.url = url; self.legacy = legacy }
+    public init(url: URL, fallback: Value, legacy: URL? = nil) {
+        self.url = url
+        self.fallback = fallback
+        self.legacy = legacy
+    }
 
-    public static let standard = PresetStore(
-        url: URL.applicationSupportDirectory.appendingPathComponent("Nagbell/presets.json"),
-        legacy: URL.applicationSupportDirectory.appendingPathComponent("StickyTimer/presets.json"))
-
-    /// Missing file → defaults. Unreadable file → moved to presets.json.bak (never silently overwritten), defaults.
-    public func load() -> [Preset] {
+    /// Missing file → fallback. Unreadable file → moved to <name>.bak (never silently overwritten), fallback.
+    public func load() -> Value {
         if let legacy, !FileManager.default.fileExists(atPath: url.path), FileManager.default.fileExists(atPath: legacy.path) {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? FileManager.default.moveItem(at: legacy, to: url)
         }
-        guard let data = try? Data(contentsOf: url) else { return Preset.defaults }
-        if let presets = try? JSONDecoder().decode([Preset].self, from: data) { return presets }
+        guard let data = try? Data(contentsOf: url) else { return fallback }
+        if let value = try? JSONDecoder().decode(Value.self, from: data) { return value }
         let backup = url.appendingPathExtension("bak")
         try? FileManager.default.removeItem(at: backup)
         try? FileManager.default.moveItem(at: url, to: backup)
-        return Preset.defaults
+        return fallback
     }
 
-    public func save(_ presets: [Preset]) throws {
+    public func save(_ value: Value) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(presets).write(to: url, options: .atomic)
+        try encoder.encode(value).write(to: url, options: .atomic)
     }
 }
+
+/// The chosen alarm sound, or Glass when it's gone (a deleted custom sound must not make the alarm silent).
+@MainActor public func alarmSound(named name: String) -> NSSound? { NSSound(named: name) ?? NSSound(named: "Glass") }
 
 /// Folders macOS's NSSound(named:) searches; drop an .aiff into ~/Library/Sounds to add your own.
 public let soundFolders = [

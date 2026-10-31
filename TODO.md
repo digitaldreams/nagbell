@@ -7,4 +7,4 @@
 - [x] 5. Alarm: window to front, red, repeating sound, Done / Snooze 5m, keep Mac awake while timers run
 - [x] 6. Bundle script → Nagbell.app, run it, see in action
 - [x] 7. Break review (light: local app, no network)
-- [ ] 8. Decide: ⌘Q with running timers (break review #1)
+- [x] 8. ⌘Q with running timers: timers saved to timers.json and restored on launch (also covers crash/reboot)
